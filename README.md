@@ -62,6 +62,8 @@ To revert to the default, simply set the selection back to “No change”.
 
 These settings are saved in `ORmagiCA_settings.ini` and do not need to be entered again at startup.
 
+<img src="img/2025-08-14-22-31-24-QQ_1755181881384.png" width="395">
+
 <img src="img/2025-08-14-22-31-51-QQ_1755181910574.png" width="395">
 
 ---
@@ -125,6 +127,8 @@ ORmagiCA的一个特色功能是关键字预设。
 当然，如果你想切换回默认模式，可以随时将选择项改成“No change”。
 
 这些设置同样会保存在`ORmagiCA_settings.ini`里，不需要每次启动时都输入。
+
+<img src="img/2025-08-14-22-31-24-QQ_1755181881384.png" width="395">
 
 <img src="img/2025-08-14-22-31-51-QQ_1755181910574.png" width="395">
 
