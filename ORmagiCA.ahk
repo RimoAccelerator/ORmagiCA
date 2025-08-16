@@ -410,7 +410,8 @@ ParseGaussianFile(content)
     if (RegExMatch(content, "m)^#\s+(.+)$", &keyMatch))
     {
         keywords := Trim(keyMatch[1])
-        result["keywords"] := StrReplace(keywords, "?")
+        ; Don't remove the ? character, just store it as is
+        result["keywords"] := keywords
     }
     
     ; Extract charge and multiplicity
@@ -486,6 +487,10 @@ CreateOrcaInput(filePath, gjfData, maxcore)
     
     ; Use selected keywords if not "No change"
     keywords := CURRENT_KEYWORDS = "No change" ? gjfData["keywords"] : CURRENT_KEYWORDS
+    
+    ; Replace ? with / in keywords for ORCA format
+    keywords := StrReplace(keywords, "?", "/")
+    
     content .= "! " . keywords . "`n"
     
     content .= "*xyz " . gjfData["charge"] . " " . gjfData["multiplicity"] . "`n"
