@@ -733,9 +733,10 @@ ExtractSettings(content, fileType := "out")
             if (!InStr(settingName, "pal") && !InStr(settingName, "maxcore"))
             {
                 ; Remove prefix from the beginning of lines
-                settingBlock := RegExReplace(settingBlock, "^\s*\|\s*\d+>\s*", "")
-                settingBlock := RegExReplace(settingBlock, "\n\s*\|\s*\d+>\s*", "`n")
-                settings .= settingBlock . "`n"
+                ; Disabled temporarily because I do not know how to make it readable and presented in the add. inp. section by Gaussview in a .log file.
+                ; settingBlock := RegExReplace(settingBlock, "^\s*\|\s*\d+>\s*", "")
+                ; settingBlock := RegExReplace(settingBlock, "\n\s*\|\s*\d+>\s*", "`n")
+                ; settings .= settingBlock . "`n"
             }
             
             startPos += StrLen(match[0])
