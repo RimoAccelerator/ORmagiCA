@@ -117,9 +117,20 @@ class SettingsGui {
     }
     
     DeleteKeyword(*) {
-        if (this.keywordsList.Value > 1) {  ; Don't delete "No change"
-            this.keywords.RemoveAt(this.keywordsList.Value)
-            this.keywordsList.Delete(this.keywordsList.Value)
+        selectedIndex := this.keywordsList.Value
+        if (selectedIndex > 1) {  ; Don't delete "No change"
+            selectedText := this.keywordsList.Text
+            
+            ; Find the actual index in the keywords array that matches the selected text
+            for i, keyword in this.keywords {
+                if (keyword = selectedText) {
+                    this.keywords.RemoveAt(i)
+                    break
+                }
+            }
+            
+            ; Delete from the ListBox
+            this.keywordsList.Delete(selectedIndex)
             this.SaveKeywords()
         }
     }
