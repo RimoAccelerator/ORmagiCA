@@ -203,37 +203,45 @@ class SettingsGui {
 ; Global hotkey for file processing
 ^+g::
 {
-    ; Get currently selected file
-    selectedFile := GetSelectedFile()
-    if (selectedFile = "")
+    ; Get currently selected files (now returns an array)
+    selectedFiles := GetSelectedFiles()
+    if (selectedFiles.Length = 0)
         return
 
-    ; Get file extension
-    SplitPath(selectedFile, &fileName, &filePath, &fileExt)
-    SplitPath(selectedFile, &fileNameWithExt, &fileDir, &fileExt, &fileName, &drive)
-
-    if (fileExt = "out")
-        ProcessOrcaOutputFile(selectedFile, filePath, fileName)
-    else if (fileExt = "inp")
+    ; Process each selected file with a 100ms delay between them
+    for i, selectedFile in selectedFiles
     {
-        fileContent := FileRead(selectedFile)
-        keywords := ExtractKeywords(fileContent)
-        nprocs := ExtractNprocs(fileContent)
-        maxcore := ExtractMaxcore(fileContent)
-        settings := ExtractSettings(fileContent, "inp")
-        charge := ExtractCharge(fileContent)
-        multiplicity := ExtractMultiplicity(fileContent)
-        coordinates := ExtractCoordinates(fileContent)
-        
-        fakeGjfFile := filePath . "\" . fileName . "_fake.gjf"
-        if CreateGaussianInput(fakeGjfFile, nprocs, maxcore, keywords, charge, multiplicity, coordinates, settings)
+        ; Get file extension
+        SplitPath(selectedFile, &fileName, &filePath, &fileExt)
+        SplitPath(selectedFile, &fileNameWithExt, &fileDir, &fileExt, &fileName, &drive)
+
+        if (fileExt = "out")
+            ProcessOrcaOutputFile(selectedFile, filePath, fileName)
+        else if (fileExt = "inp")
         {
-            if FileExist(fakeGjfFile)
+            fileContent := FileRead(selectedFile)
+            keywords := ExtractKeywords(fileContent)
+            nprocs := ExtractNprocs(fileContent)
+            maxcore := ExtractMaxcore(fileContent)
+            settings := ExtractSettings(fileContent, "inp")
+            charge := ExtractCharge(fileContent)
+            multiplicity := ExtractMultiplicity(fileContent)
+            coordinates := ExtractCoordinates(fileContent)
+            
+            fakeGjfFile := filePath . "\" . fileName . "_fake.gjf"
+            if CreateGaussianInput(fakeGjfFile, nprocs, maxcore, keywords, charge, multiplicity, coordinates, settings)
             {
-                OpenWithGaussView(fakeGjfFile)
-                SetTimer () => FileExist(fakeGjfFile) ? FileDelete(fakeGjfFile) : "", -2000
+                if FileExist(fakeGjfFile)
+                {
+                    OpenWithGaussView(fakeGjfFile)
+                    SetTimer () => FileExist(fakeGjfFile) ? FileDelete(fakeGjfFile) : "", -2000
+                }
             }
         }
+        
+        ; Add delay between processing files (unless this is the last file)
+        if (i < selectedFiles.Length)
+            Sleep(100)
     }
 }
 
@@ -538,10 +546,12 @@ StrCount(haystack, needle)
     return count
 }
 
-; Function: Get currently selected file in Windows Explorer
-GetSelectedFile()
+; Function: Get currently selected files in Windows Explorer (modified to return an array)
+GetSelectedFiles()
 {
-    ; Try to get selected file using Windows Explorer
+    selectedFiles := []
+    
+    ; Try to get selected files using Windows Explorer
     explorerHwnd := WinExist("ahk_class CabinetWClass") or WinExist("ahk_class ExploreWClass")
     if (explorerHwnd)
     {
@@ -553,14 +563,22 @@ GetSelectedFile()
                 {
                     selectedItems := window.Document.SelectedItems
                     for item in selectedItems
-                        return item.Path
+                        selectedFiles.Push(item.Path)
+                    return selectedFiles
                 }
             }
         }
     }
     
-    ; If no file is selected in Explorer, return an empty string
-    return ""
+    ; If no file is selected in Explorer, return an empty array
+    return selectedFiles
+}
+
+; Original GetSelectedFile function renamed to GetSelectedFile for backward compatibility if needed
+GetSelectedFile()
+{
+    files := GetSelectedFiles()
+    return files.Length > 0 ? files[1] : ""
 }
 
 ; Function: Process ORCA output file
