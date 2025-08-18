@@ -718,8 +718,8 @@ ExtractCoordinates(content)
 {
     coordinates := ""
     
-    ; Find coordinates between *xyz and *
-    regexPattern := "i)\*xyz[^\n]*\n([\s\S]*?)\*"
+    ; Find coordinates between *xyz and * with improved regex to handle spaces and newlines
+    regexPattern := "i)\*\s*xyz[^\n]*\n([\s\S]*?)\*"
     if (RegExMatch(content, regexPattern, &match))
     {
         ; Extract coordinates and trim leading/trailing whitespace
@@ -736,48 +736,112 @@ ExtractSettings(content, fileType := "out")
     
     if (fileType = "inp")
     {
-        ; Logic for .inp files
-        startPos := 1
-        ; Modify regex to match end on the same line or multiple lines
-        while (startPos := RegExMatch(content, "im)^%(\w+(?:\s+[^\r\n]+?)?)(?:\s+end\b|\n(?:(?!%).)*?\n\s*end\b)", &match, startPos))
+        ; Logic for .inp files - handle both single-line and multi-line blocks
+        lines := StrSplit(content, "`n", "`r")
+        i := 1
+        while (i <= lines.Length)
         {
-            settingBlock := match[0]  ; Get entire match block
-            settingName := match[1]   ; Get setting name
+            line := Trim(lines[i])
             
-            ; Skip settings already handled separately
-            if (!InStr(settingName, "pal") && !InStr(settingName, "maxcore"))
+            ; Check if line starts with % and is a setting block
+            if (RegExMatch(line, "^%(\w+)(.*)$", &match))
             {
-                settings .= settingBlock . "`n"
+                settingName := match[1]
+                restOfLine := Trim(match[2])
+                
+                ; Skip pal and maxcore as they're handled separately
+                if (settingName = "pal" || settingName = "maxcore")
+                {
+                    i++
+                    continue
+                }
+                
+                ; Start building the setting block
+                settingBlock := line . "`n"
+                
+                ; Check if it's a single-line setting ending with "end"
+                if (InStr(restOfLine, "end"))
+                {
+                    settings .= settingBlock
+                    i++
+                    continue
+                }
+                
+                ; It's a multi-line block, read until we find "end"
+                i++
+                while (i <= lines.Length)
+                {
+                    currentLine := lines[i]
+                    settingBlock .= currentLine . "`n"
+                    
+                    ; Check if this line contains "end" (allowing for whitespace)
+                    if (RegExMatch(Trim(currentLine), "^end\s*$"))
+                        break
+                    
+                    i++
+                }
+                
+                settings .= settingBlock
             }
             
-            startPos += StrLen(match[0])
+            i++
         }
     }
     else
     {
-        ; Logic for .out files
-        startPos := 1
-        ; Modify regex to match end on the same line or multiple lines
-        while (startPos := RegExMatch(content, "im)^\s*\|\s*\d+>\s*%(\w+(?:\s+[^\r\n]+?)?)(?:\s+end\b|\n(?:(?!\|\s*\d+>\s*%).)*?\|\s*\d+>\s*end\b)", &match, startPos))
+        ; Logic for .out files - handle both single-line and multi-line blocks
+        lines := StrSplit(content, "`n", "`r")
+        i := 1
+        while (i <= lines.Length)
         {
-            settingBlock := match[0]  ; Get entire match block
-            settingName := match[1]   ; Get setting name
+            line := lines[i]
             
-            ; Skip settings already handled separately
-            if (!InStr(settingName, "pal") && !InStr(settingName, "maxcore"))
+            ; Check if line matches the .out file format pattern
+            if (RegExMatch(line, "^\s*\|\s*\d+>\s*%(\w+)(.*)$", &match))
             {
-                ; Remove prefix from the beginning of lines
-                ; Disabled temporarily because I do not know how to make it readable and presented in the add. inp. section by Gaussview in a .log file.
-                ; settingBlock := RegExReplace(settingBlock, "^\s*\|\s*\d+>\s*", "")
-                ; settingBlock := RegExReplace(settingBlock, "\n\s*\|\s*\d+>\s*", "`n")
-                ; settings .= settingBlock . "`n"
+                settingName := match[1]
+                restOfLine := Trim(match[2])
+                
+                ; Skip pal and maxcore as they're handled separately
+                if (settingName = "pal" || settingName = "maxcore")
+                {
+                    i++
+                    continue
+                }
+                
+                ; Start building the setting block
+                settingBlock := line . "`n"
+                
+                ; Check if it's a single-line setting ending with "end"
+                if (InStr(restOfLine, "end"))
+                {
+                    settings .= settingBlock
+                    i++
+                    continue
+                }
+                
+                ; It's a multi-line block, read until we find "end"
+                i++
+                while (i <= lines.Length)
+                {
+                    currentLine := lines[i]
+                    settingBlock .= currentLine . "`n"
+                    
+                    ; Check if this line contains "end" with the .out format
+                    if (RegExMatch(currentLine, "^\s*\|\s*\d+>\s*end\s*$"))
+                        break
+                    
+                    i++
+                }
+                
+                settings .= settingBlock
             }
             
-            startPos += StrLen(match[0])
+            i++
         }
     }
     
-    return settings
+    return RTrim(settings, "`n")
 }
 
 ; Function: Create Gaussian input file
