@@ -61,6 +61,7 @@ class SettingsGui {
         this.gvPath.OnEvent("Change", this.SavePaths.Bind(this))
         this.ofakePath.OnEvent("Change", this.SavePaths.Bind(this))
         this.keywordsList.OnEvent("Change", this.UpdateKeywords.Bind(this))
+        this.keywordsList.OnEvent("Change", this.OnKeywordSelected.Bind(this))  ; Add this line
         addBtn.OnEvent("Click", this.AddKeyword.Bind(this))
         deleteBtn.OnEvent("Click", this.DeleteKeyword.Bind(this))
         
@@ -75,9 +76,6 @@ class SettingsGui {
         
         ; Add default keywords
         this.LoadKeywords()
-        
-        ; Track keywords in a separate array
-        this.keywords := ["No change"]
         
         return this
     }
@@ -109,6 +107,14 @@ class SettingsGui {
     AddKeyword(*) {
         newKeyword := this.newKeyword.Text
         if (newKeyword != "") {
+            ; Check if keyword already exists to avoid duplicates
+            for keyword in this.keywords {
+                if (keyword = newKeyword) {
+                    this.newKeyword.Value := ""  ; Clear input
+                    return  ; Don't add duplicate
+                }
+            }
+            
             this.keywords.Push(newKeyword)
             this.keywordsList.Add([newKeyword])
             this.newKeyword.Value := ""  ; Clear input
@@ -164,7 +170,7 @@ class SettingsGui {
     
     LoadKeywords() {
         this.keywordsList.Delete()
-        this.keywords := ["No change"]
+        this.keywords := ["No change"]  ; Initialize with "No change"
         
         iniPath := A_ScriptDir "\ORmagiCA_settings.ini"
         loop {
@@ -196,6 +202,14 @@ class SettingsGui {
         
         if (this.keywordsList.Value)
             CURRENT_KEYWORDS := this.keywordsList.Text
+    }
+    
+    OnKeywordSelected(*) {
+        ; Update the text box with the selected keyword
+        if (this.keywordsList.Value) {
+            selectedText := this.keywordsList.Text
+            this.newKeyword.Value := selectedText
+        }
     }
 }
 
@@ -266,7 +280,7 @@ class SettingsGui {
     ; Try to detect save dialog
     dialogHwnd := ""
     startTime := A_TickCount
-    while (A_TickCount - startTime < 5000)
+    while (A_TickCount - startTime < 1000)
     {
         if (hwnd := WinExist("Save Structure Files"))
         {
@@ -321,7 +335,7 @@ class SettingsGui {
     
     ; Wait for file to exist
     startTime := A_TickCount
-    while (!FileExist(savedPath) && A_TickCount - startTime < 5000)
+    while (!FileExist(savedPath) && A_TickCount - startTime < 1000)
         Sleep(100)
         
     if (!FileExist(savedPath))
@@ -510,6 +524,9 @@ CreateOrcaInput(filePath, gjfData, maxcore)
     ; Replace ? with / in keywords for ORCA format
     keywords := StrReplace(keywords, "?", "/")
     
+    ; Also convert smd=xxx to smd(xxx) format
+    keywords := RegExReplace(keywords, "i)\bsmd=([^\s]+)", "smd($1)")
+    
     content .= "! " . keywords . "`n"
     
     content .= "*xyz " . gjfData["charge"] . " " . gjfData["multiplicity"] . "`n"
@@ -598,13 +615,15 @@ ProcessOrcaOutputFile(orcaFile, filePath, fileName)
     charge := ExtractCharge(fileContent)
     multiplicity := ExtractMultiplicity(fileContent)
     
+    ; Extract absorption spectrum data
+    spectrumData := ExtractAbsorptionSpectrum(fileContent)
+    
     ; Call OfakeG.exe to convert file
     RunWait("`"" . OFAKE_G_PATH . "`" `"" . orcaFile . "`"", filePath)
     
     ; If generated file exists, add additional information
     if (FileExist(fakeLogFile))
     {
-
         ; Create content to be added at the beginning of the file
         memGB := Floor(maxcore * nprocs / 1000)
         headerContent := " Entering Link 1 = Welcome! `n"
@@ -621,7 +640,6 @@ ProcessOrcaOutputFile(orcaFile, filePath, fileName)
         headerContent .= "`nCharge = " . charge . " Multiplicity = " . multiplicity
         headerContent .= "`n Mg                   -0.00161   2.07295   0.62816"
         headerContent .= "`n"
-
         
         ; Add other settings to headerContent (possibly for Add. Inp. section)
         if (settings != "")
@@ -630,11 +648,17 @@ ProcessOrcaOutputFile(orcaFile, filePath, fileName)
         ; Read existing _fake.out file content
         existingContent := FileRead(fakeLogFile)
         
-        ; Write new content to file (prepend our content)
+        ; Format excitation data if found
+        footerContent := ""
+        if (spectrumData["found"]) {
+            footerContent := "`n" . FormatGaussianExcitations(spectrumData)
+        }
+        
+        ; Write new content to file (prepend our content and append excitation data)
         try
         {
             FileDelete(fakeLogFile)
-            FileAppend(headerContent . "`n" . existingContent, fakeLogFile)
+            FileAppend(headerContent . "`n" . existingContent . footerContent, fakeLogFile)
         }
         catch as e
         {
@@ -900,4 +924,115 @@ OpenWithGaussView(filePath)
         ; If GaussView is not found, try to open with file association
         Run(filePath)
     }
+}
+
+; Function: Extract absorption spectrum data from ORCA output
+ExtractAbsorptionSpectrum(content) {
+    result := Map()
+    result["found"] := false
+    
+    ; Regular expression to find the absorption spectrum table
+    regexPattern := "s)ABSORPTION SPECTRUM VIA TRANSITION ELECTRIC DIPOLE MOMENTS[\s\S]*?-{20,}[\s\S]*?-{20,}([\s\S]*?)-{20,}"
+    if (RegExMatch(content, regexPattern, &match)) {
+        tableContent := match[1]
+        
+        ; Now parse the transitions
+        transitions := []
+        
+        ; Split into lines and process each line
+        lines := StrSplit(tableContent, "`n", "`r")
+        for line in lines {
+            ; Skip empty lines
+            if (Trim(line) = "") {
+                continue
+            }
+            
+            ; Extract transition data with regex
+            ; Format: "  0-1A  ->  1-1A    2.849027   22979.0   435.2   1.799267602  25.77751  -5.06692   0.00145  -0.32221"
+            transitionPattern := "^\s*\d+-(\d+)(\w+)\s+->\s+(\d+)-(\d+)(\w+)\s+(\d+\.\d+)\s+(\d+\.\d+)\s+(\d+\.\d+)\s+(\d+\.\d+)"
+            if (RegExMatch(line, transitionPattern, &tMatch)) {
+                transition := Map()
+                transition["fromSpin"] := tMatch[1]
+                transition["fromSymm"] := tMatch[2]
+                transition["state"] := tMatch[3]
+                transition["toSpin"] := tMatch[4]
+                transition["toSymm"] := tMatch[5]
+                transition["energy_eV"] := tMatch[6]
+                transition["energy_cm"] := tMatch[7]
+                transition["wavelength_nm"] := tMatch[8]
+                transition["oscillator"] := tMatch[9]
+                
+                transitions.Push(transition)
+            }
+        }
+        
+        if (transitions.Length > 0) {
+            result["found"] := true
+            result["transitions"] := transitions
+        }
+    }
+    
+    ; Extract S**2 values from STATE lines
+    statePattern := "STATE (\d+): E=.*?<S\*\*2> = (\d+\.\d+) Mult (\d+)"
+    pos := 1
+    while (pos := RegExMatch(content, statePattern, &stateMatch, pos)) {
+        stateNum := stateMatch[1]
+        s2Value := stateMatch[2]
+        multValue := stateMatch[3]
+        
+        ; Store S**2 values for each state
+        if (!result.Has("s2values"))
+            result["s2values"] := Map()
+            
+        result["s2values"][stateNum] := {s2: s2Value, mult: multValue}
+        
+        pos += stateMatch.Len
+    }
+    
+    return result
+}
+
+; Function: Format absorption spectrum data as Gaussian output
+FormatGaussianExcitations(spectrumData) {
+    if (!spectrumData["found"]) {
+        return ""
+    }
+    
+    result := " Excitation energies and oscillator strengths:`n"
+    
+    transitions := spectrumData["transitions"]
+    s2values := spectrumData.Has("s2values") ? spectrumData["s2values"] : Map()
+    
+    ; Process each transition
+    for i, transition in transitions {
+        stateNum := transition["state"]
+        
+        ; Determine multiplicity
+        multLabel := "Singlet"
+        s2Value := "0.000"
+        
+        if (s2values.Has(stateNum)) {
+            s2Value := s2values[stateNum]["s2"]
+            multValue := s2values[stateNum]["mult"]
+            
+            if (multValue = "3")
+                multLabel := "Triplet"
+            else if (multValue = "5")
+                multLabel := "Quintet"
+        }
+        
+        ; Get values
+        energy_eV := transition["energy_eV"]
+        wavelength := transition["wavelength_nm"]
+        oscillator := transition["oscillator"]
+        
+        ; Format the line
+        result .= Format(" Excited State   {1}:      {2}-{3}      {4} eV  {5} nm  f={6}  <S**2>={7}`n", 
+                         i, multLabel, transition["toSymm"], energy_eV, wavelength, oscillator, s2Value)
+    }
+    
+    ; Add the SavETr line
+    result .= Format(" SavETr:  write IOETrn=   770 NScale= 10 NData=  16 NLR=1 NState=    {1} LETran=     100.", transitions.Length)
+    
+    return result
 }
