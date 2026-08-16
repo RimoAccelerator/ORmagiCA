@@ -568,13 +568,13 @@ GetSelectedFiles()
 {
     selectedFiles := []
     
-    ; Try to get selected files using Windows Explorer
+    ; Method 1: Get selected files via ShellWindows collection
     explorerHwnd := WinExist("ahk_class CabinetWClass") or WinExist("ahk_class ExploreWClass")
     if (explorerHwnd)
     {
-        for window in ComObject("Shell.Application").Windows
+        try
         {
-            try
+            for window in ComObject("Shell.Application").Windows
             {
                 if (window.HWND = explorerHwnd)
                 {
@@ -587,8 +587,57 @@ GetSelectedFiles()
         }
     }
     
+    ; Method 2 (fallback): If ShellWindows is broken (e.g. after Explorer restart it can
+    ; enumerate zero windows), get the selection from the active Explorer window by copying
+    ; it to the clipboard and reading the CF_HDROP data. This does not depend on ShellWindows.
+    if (selectedFiles.Length = 0 && WinActive("ahk_class CabinetWClass"))
+    {
+        selectedFiles := GetSelectedFilesViaClipboard()
+        if (selectedFiles.Length > 0)
+            return selectedFiles
+    }
+    
     ; If no file is selected in Explorer, return an empty array
     return selectedFiles
+}
+
+; Fallback: get selected files by copying the Explorer selection to the clipboard
+; and reading the CF_HDROP data (works even when ShellWindows returns no windows)
+GetSelectedFilesViaClipboard()
+{
+    files := []
+    
+    ; Only run when an Explorer window is active to avoid touching other apps
+    if !WinActive("ahk_class CabinetWClass")
+        return files
+    
+    ; Copy the current selection
+    Send("^c")
+    
+    loop 5
+    {
+        Sleep(100)
+        if DllCall("OpenClipboard", "Ptr", 0)
+        {
+            hDrop := DllCall("GetClipboardData", "UInt", 15, "Ptr")  ; CF_HDROP = 15
+            if (hDrop)
+            {
+                fileCount := DllCall("shell32\DragQueryFileW", "Ptr", hDrop, "UInt", 0xFFFFFFFF, "Ptr", 0, "UInt", 0)
+                Loop fileCount
+                {
+                    charCount := DllCall("shell32\DragQueryFileW", "Ptr", hDrop, "UInt", A_Index - 1, "Ptr", 0, "UInt", 0)
+                    buf := Buffer((charCount + 1) * 2, 0)
+                    DllCall("shell32\DragQueryFileW", "Ptr", hDrop, "UInt", A_Index - 1, "Ptr", buf, "UInt", charCount + 1)
+                    files.Push(StrGet(buf, charCount, "UTF-16"))
+                }
+            }
+            DllCall("CloseClipboard")
+            if (files.Length > 0)
+                return files
+        }
+    }
+    
+    return files
 }
 
 ; Original GetSelectedFile function renamed to GetSelectedFile for backward compatibility if needed
