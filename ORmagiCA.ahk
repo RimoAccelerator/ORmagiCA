@@ -446,6 +446,8 @@ ParseGaussianFile(content)
         ; Don't remove the ? character, just store it as is
         result["keywords"] := keywords
     }
+    else
+        result["keywords"] := ""
     
     ; Extract charge and multiplicity
     chargeMultiPattern := "m)^\s*(-?\d+)\s+(\d+)\s*$"
@@ -460,25 +462,74 @@ ParseGaussianFile(content)
         }
     }
     
-    ; Extract coordinates
-    coords := ""
+    ; Extract coordinates (with optional freeze/fragment flags) and the
+    ; opt=modredundant section that follows them
+    atoms := []
+    frozen := []          ; 0-based indices of atoms frozen via -1 flag
+    cleanCoords := ""
     inCoords := false
+    coordDone := false
+    modredLines := []
     for line in lines
     {
-        if (RegExMatch(line, "^(-?\d+\s+\d+)\s*$"))
+        if (!inCoords && RegExMatch(line, "^\s*-?\d+\s+\d+\s*$"))
         {
             inCoords := true
             continue
         }
-        if (inCoords)
+        if (inCoords && !coordDone)
         {
-            if (Trim(line) = "" || RegExMatch(line, "^%"))
-                break
-            if (RegExMatch(line, "^\s*[A-Za-z]"))
-                coords .= line . "`n"
+            trimmedLine := Trim(line)
+            if (trimmedLine = "" || RegExMatch(line, "^%"))
+            {
+                coordDone := true
+                continue
+            }
+            atom := ParseAtomLine(trimmedLine)
+            if (IsObject(atom))
+            {
+                atoms.Push(atom)
+                if (atom["frozen"])
+                    frozen.Push(atoms.Length - 1)
+                cleanCoords .= atom["sym"] . " " . atom["x"] . " " . atom["y"] . " " . atom["z"] . "`n"
+            }
+        }
+        else if (coordDone)
+        {
+            trimmedLine := Trim(line)
+            if (trimmedLine = "")
+            {
+                if (modredLines.Length > 0)
+                    break   ; blank line after the modredundant section -> done
+                continue
+            }
+            if (IsModRedundantCandidate(trimmedLine))
+                modredLines.Push(trimmedLine)
+            else if (modredLines.Length > 0)
+                break   ; some other section started
         }
     }
-    result["coordinates"] := RTrim(coords, "`n")
+    result["coordinates"] := RTrim(cleanCoords, "`n")
+    result["atoms"] := atoms
+    result["frozen"] := frozen
+    
+    ; Parse the modredundant section into constraints and scans
+    constraints := []
+    scans := []
+    for modredLine in modredLines
+    {
+        entry := ParseModRedundantLine(modredLine)
+        if (IsObject(entry))
+        {
+            if (entry["kind"] = "scan")
+                scans.Push(entry)
+            else
+                constraints.Push(entry)
+        }
+    }
+    result["modredConstraints"] := constraints
+    result["modredScans"] := scans
+    result["hasModRedKeyword"] := RegExMatch(result["keywords"], "i)modredundant") ? true : false
     
     ; Extract other settings
     settings := ""
@@ -527,7 +578,17 @@ CreateOrcaInput(filePath, gjfData, maxcore)
     ; Also convert smd=xxx to smd(xxx) format
     keywords := RegExReplace(keywords, "i)\bsmd=([^\s]+)", "smd($1)")
     
+    ; opt=modredundant is Gaussian-only; in ORCA the constraints/scans
+    ; live in the %geom block instead
+    if (gjfData.Has("hasModRedKeyword") && gjfData["hasModRedKeyword"])
+        keywords := CleanupModRedundantKeyword(keywords)
+    
     content .= "! " . keywords . "`n"
+    
+    ; Convert G16 modredundant constraints/scans and frozen atoms to ORCA format
+    geomBlock := BuildOrcaGeomBlock(gjfData)
+    if (geomBlock != "")
+        content .= "`n" . geomBlock . "`n"
     
     content .= "*xyz " . gjfData["charge"] . " " . gjfData["multiplicity"] . "`n"
     content .= gjfData["coordinates"] . "`n"
@@ -1084,4 +1145,355 @@ FormatGaussianExcitations(spectrumData) {
     result .= Format(" SavETr:  write IOETrn=   770 NScale= 10 NData=  16 NLR=1 NState=    {1} LETran=     100.", transitions.Length)
     
     return result
+}
+
+; ---------------------------------------------------------------------------
+; Gaussian modredundant -> ORCA %geom conversion
+; ---------------------------------------------------------------------------
+
+; Split a line into whitespace-separated tokens
+TokenizeLine(line)
+{
+    tokens := []
+    pos := 1
+    while (pos := RegExMatch(line, "\S+", &m, pos))
+    {
+        tokens.Push(m[0])
+        pos += m.Len
+    }
+    return tokens
+}
+
+IsNumericToken(tok)
+{
+    return RegExMatch(tok, "^[-+]?(\d+(\.\d*)?|\.\d+)([EeDd][-+]?\d+)?$") ? true : false
+}
+
+; Parse one coordinate line of a .gjf file.
+; Supported forms:
+;   Sym x y z            (plain atom)
+;   Sym flag x y z       (flag: 0 = free, -1 = frozen, >0 = fragment id)
+ParseAtomLine(line)
+{
+    tokens := TokenizeLine(line)
+    if (tokens.Length < 4)
+        return ""
+    
+    sym := tokens[1]
+    if !RegExMatch(sym, "^[A-Za-z]")
+        return ""
+    
+    ; Coordinates are the last three tokens; anything between the symbol and
+    ; them is a fragment number or freeze flag (e.g. 0 / -1)
+    xTok := tokens[tokens.Length - 2]
+    yTok := tokens[tokens.Length - 1]
+    zTok := tokens[tokens.Length]
+    if !(IsNumericToken(xTok) && IsNumericToken(yTok) && IsNumericToken(zTok))
+        return ""
+    
+    frozen := false
+    if (tokens.Length > 4)
+    {
+        if !IsNumericToken(tokens[2])
+            return ""
+        frozen := (Integer(tokens[2]) < 0)
+    }
+    
+    atom := Map()
+    atom["sym"] := sym
+    atom["x"] := xTok
+    atom["y"] := yTok
+    atom["z"] := zTok
+    atom["frozen"] := frozen
+    return atom
+}
+
+; Quick check whether a line looks like a modredundant directive,
+; e.g. "B 20 7 F", "A 93 91 94 F", "D 22 39 53 91 F", "A 92 91 94 S 10 0.1"
+IsModRedundantCandidate(line)
+{
+    return RegExMatch(line, "i)^[BADX]\s+\d+(\s+\d+)*\s+[FS](\s|$)") ? true : false
+}
+
+; Parse a single G16 modredundant directive line.
+;   B i j F | A i j k F | D i j k l F | X i F      -> constraint entries
+;   B/A/D ... S steps stepSize                      -> scan entry
+; Returns "" for unsupported lines (K/break, value-only lines, etc.)
+ParseModRedundantLine(line)
+{
+    tokens := TokenizeLine(line)
+    if (tokens.Length < 2)
+        return ""
+    
+    t1 := tokens[1]
+    if (t1 = "B" || t1 = "b")
+        type := "B", expectedInts := 2
+    else if (t1 = "A" || t1 = "a")
+        type := "A", expectedInts := 3
+    else if (t1 = "D" || t1 = "d")
+        type := "D", expectedInts := 4
+    else if (t1 = "X" || t1 = "x")
+        type := "X", expectedInts := 0
+    else
+        return ""
+    
+    ; Cartesian freeze: only "X atom F" is supported -> { C N C }
+    if (type = "X")
+    {
+        if (tokens.Length != 3 || !RegExMatch(tokens[2], "^\d+$") || !(tokens[3] = "F" || tokens[3] = "f"))
+            return ""
+        entry := Map()
+        entry["kind"] := "constraint"
+        entry["type"] := "X"
+        entry["atoms"] := [Integer(tokens[2])]
+        return entry
+    }
+    
+    minLen := 1 + expectedInts + 1   ; type + indices + modifier
+    if (tokens.Length < minLen)
+        return ""
+    
+    indices := []
+    i := 2
+    Loop expectedInts
+    {
+        if !RegExMatch(tokens[i], "^\d+$")
+            return ""
+        indices.Push(Integer(tokens[i]))
+        i++
+    }
+    
+    modifier := tokens[i]
+    entry := Map()
+    entry["type"] := type
+    entry["atoms"] := indices
+    
+    if (modifier = "F" || modifier = "f")
+    {
+        entry["kind"] := "constraint"
+    }
+    else if (modifier = "S" || modifier = "s")
+    {
+        if (tokens.Length < i + 2)
+            return ""
+        stepsTok := tokens[i + 1]
+        stepTok := tokens[i + 2]
+        if !(RegExMatch(stepsTok, "^\d+$") && IsNumericToken(stepTok))
+            return ""
+        entry["kind"] := "scan"
+        entry["steps"] := Integer(stepsTok)
+        entry["stepSize"] := Number(stepTok)
+    }
+    else
+        return ""
+    
+    return entry
+}
+
+; Build an ORCA %geom block from parsed gjf data.
+; Returns "" when there is nothing to constrain or scan.
+BuildOrcaGeomBlock(gjfData)
+{
+    constraintLines := []
+    scanLines := []
+    
+    ; Redundant internal-coordinate freezes (B/A/D ... F) and cartesian
+    ; freezes (X ... F); G16 numbering is 1-based, ORCA is 0-based
+    for entry in gjfData["modredConstraints"]
+    {
+        if (entry["type"] = "X")
+            constraintLines.Push("{ C " . (entry["atoms"][1] - 1) . " C }")
+        else
+        {
+            line := "{ " . entry["type"]
+            for v in entry["atoms"]
+                line .= " " . (v - 1)
+            line .= " C }"
+            constraintLines.Push(line)
+        }
+    }
+    
+    ; Atoms frozen via the -1 flag in the coordinate block -> { C N C }
+    for orcaIdx in gjfData["frozen"]
+    {
+        line := "{ C " . orcaIdx . " C }"
+        if !HasArrayValue(constraintLines, line)
+            constraintLines.Push(line)
+    }
+    
+    ; Scans: G16 reads the start value from the input geometry and only gives
+    ; steps/step size, so compute start (and end) from the coordinates here
+    atoms := gjfData["atoms"]
+    for entry in gjfData["modredScans"]
+    {
+        idx := entry["atoms"]
+        switch entry["type"]
+        {
+            case "B": startVal := GeomBond(atoms, idx[1], idx[2])
+            case "A": startVal := GeomAngle(atoms, idx[1], idx[2], idx[3])
+            case "D": startVal := GeomDihedral(atoms, idx[1], idx[2], idx[3], idx[4])
+            default:  startVal := ""
+        }
+        
+        if !IsNumber(startVal)
+            continue   ; invalid atom reference in this scan line
+        
+        endVal := startVal + entry["steps"] * entry["stepSize"]
+        
+        line := entry["type"]
+        for v in idx
+            line .= " " . (v - 1)
+        line .= " = " . FormatOrcaValue(startVal) . ", " . FormatOrcaValue(endVal) . ", " . entry["steps"]
+        scanLines.Push(line)
+    }
+    
+    if (constraintLines.Length = 0 && scanLines.Length = 0)
+        return ""
+    
+    block := "%geom`n"
+    if (constraintLines.Length > 0)
+    {
+        block .= "      Constraints`n"
+        for cl in constraintLines
+            block .= "          " . cl . "`n"
+        block .= "      end`n"
+    }
+    if (scanLines.Length > 0)
+    {
+        block .= "      Scan`n"
+        for sl in scanLines
+            block .= "          " . sl . "`n"
+        block .= "      end`n"
+    }
+    block .= " end"
+    return block
+}
+
+HasArrayValue(arr, val)
+{
+    for v in arr
+        if (v = val)
+            return true
+    return false
+}
+
+FormatOrcaValue(v)
+{
+    return Format("{:.6f}", v)
+}
+
+; Remove the Gaussian-only modredundant keyword variants, keeping any other
+; opt options intact (e.g. "opt=(modredundant,maxcycle=50)" -> "opt=(maxcycle=50)")
+CleanupModRedundantKeyword(keywords)
+{
+    keywords := RegExReplace(keywords, "i)\bopt\s*=\s*\(\s*modredundant\s*,\s*", "opt=(")
+    keywords := RegExReplace(keywords, "i)\bopt\s*=\s*\(\s*modredundant\s*\)", "opt")
+    keywords := RegExReplace(keywords, "i)\bopt\s*=\s*modredundant\s*,\s*(?=[^\s(])", "opt=(")
+    keywords := RegExReplace(keywords, "i)\bopt\s*=\s*modredundant\b", "opt")
+    keywords := RegExReplace(keywords, "i)(^|\s)modredundant(\s|$)", "$1$2")
+    keywords := Trim(RegExReplace(keywords, "\s+", " "))
+    return keywords
+}
+
+; ---------------------------------------------------------------------------
+; Geometry helpers (G16 1-based atom indices; vectors are [x, y, z] arrays)
+; ---------------------------------------------------------------------------
+
+AtomPos(atoms, g16Idx)
+{
+    if (g16Idx < 1 || g16Idx > atoms.Length)
+        return ""
+    a := atoms[g16Idx]
+    return [Number(a["x"]), Number(a["y"]), Number(a["z"])]
+}
+
+GeomBond(atoms, i, j)
+{
+    a := AtomPos(atoms, i), b := AtomPos(atoms, j)
+    if (!IsObject(a) || !IsObject(b))
+        return ""
+    d := VecSub(a, b)
+    return Sqrt(d[1]*d[1] + d[2]*d[2] + d[3]*d[3])
+}
+
+; Angle at central atom j
+GeomAngle(atoms, i, j, k)
+{
+    a := AtomPos(atoms, i), b := AtomPos(atoms, j), c := AtomPos(atoms, k)
+    if (!(IsObject(a) && IsObject(b) && IsObject(c)))
+        return ""
+    u := VecSub(a, b)
+    v := VecSub(c, b)
+    lu := VecNorm(u), lv := VecNorm(v)
+    if (lu = 0 || lv = 0)
+        return ""
+    cosV := VecDot(u, v) / (lu * lv)
+    cosV := Min(1, Max(-1, cosV))
+    return RadToDeg(ACos(cosV))
+}
+
+; Torsion i-j-k-l
+GeomDihedral(atoms, i, j, k, l)
+{
+    p1 := AtomPos(atoms, i), p2 := AtomPos(atoms, j), p3 := AtomPos(atoms, k), p4 := AtomPos(atoms, l)
+    if (!(IsObject(p1) && IsObject(p2) && IsObject(p3) && IsObject(p4)))
+        return ""
+    b1 := VecSub(p2, p1)
+    b2 := VecSub(p3, p2)
+    b3 := VecSub(p4, p3)
+    lb2 := VecNorm(b2)
+    if (lb2 = 0)
+        return ""
+    n1 := VecCross(b1, b2)
+    n2 := VecCross(b2, b3)
+    m1 := VecCross(n1, VecScale(b2, 1.0 / lb2))
+    ln2 := VecNorm(n2)
+    if (ln2 = 0)
+        return ""
+    x := VecDot(n1, n2)
+    y := VecDot(m1, n2)
+    return RadToDeg(ATan2(y, x))
+}
+
+VecSub(a, b)
+{
+    return [a[1] - b[1], a[2] - b[2], a[3] - b[3]]
+}
+
+VecDot(a, b)
+{
+    return a[1]*b[1] + a[2]*b[2] + a[3]*b[3]
+}
+
+VecCross(a, b)
+{
+    return [a[2]*b[3] - a[3]*b[2], a[3]*b[1] - a[1]*b[3], a[1]*b[2] - a[2]*b[1]]
+}
+
+VecScale(a, s)
+{
+    return [a[1]*s, a[2]*s, a[3]*s]
+}
+
+VecNorm(a)
+{
+    return Sqrt(VecDot(a, a))
+}
+
+RadToDeg(r)
+{
+    return r * 180.0 / ACos(-1.0)
+}
+
+; ATan2 is not a built-in in AHK v2, so provide it here
+ATan2(y, x)
+{
+    static pi := ACos(-1.0)
+    if (y = 0 && x = 0)
+        return 0
+    if (x > 0)
+        return ATan(y / x)
+    if (x < 0)
+        return (y >= 0) ? ATan(y / x) + pi : ATan(y / x) - pi
+    return (y > 0) ? pi / 2 : -pi / 2
 }
