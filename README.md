@@ -99,7 +99,7 @@ These settings are saved in `ORmagiCA_settings.ini` and do not need to be entere
 
 If ORmagiCA is part of your workflow, please cite this GitHub page:  
 
-Yumiao Ma. KST48: ORmagiCA: A desktop helper to adapt GaussView with ORCA. https://github.com/RimoAccelerator/ORmagiCA, accessed on xxxx.xx.xx.
+Yumiao Ma. ORmagiCA: A desktop helper to adapt GaussView with ORCA. https://github.com/RimoAccelerator/ORmagiCA, accessed on xxxx.xx.xx.
 
 ---
 
@@ -191,4 +191,4 @@ ORmagiCA的一个特色功能是关键字预设。
 
 如果你的工作流中使用了ORmagiCA，欢迎引用本Github页面：  
 
-Yumiao Ma. KST48: ORmagiCA: A desktop helper to adapt GaussView with ORCA. https://github.com/RimoAccelerator/ORmagiCA, accessed on xxxx.xx.xx.
+Yumiao Ma. ORmagiCA: A desktop helper to adapt GaussView with ORCA. https://github.com/RimoAccelerator/ORmagiCA, accessed on xxxx.xx.xx.
