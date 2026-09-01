@@ -21,6 +21,8 @@ ORmagiCA is a desktop helper based on AutoHotkey 2. After installing AutoHotkey 
 
 > **Update note (2026-09-01):** This release no longer depends on OfakeG. `.out` conversion can now use the built-in **orca2gaussian** module (recommended), which automatically converts atomic charges / spin densities, recognizes `%pal`/`%maxcore`, and lets you pick `scanall` vs `scanlast` for scans. OfakeG remains available as an optional backend via `UseOfakeG`. The settings dialog and orca2gaussian prompts now support a Chinese/English UI language switch.
 
+<img title="" src="img/logo.jpeg" alt="" width="281" data-align="center">
+
 ---
 
 ### 1. First-time setup
@@ -112,6 +114,8 @@ ORmagiCA的作用就是彻底打通工作流，让用户能够用GaussView一个
 ORmagiCA是一个基于Autohotkey 2的桌面助手。在安装Autohotkey 2后，双击`ORmagiCA.ahk`文件即自动在后台运行。我们也可以把它加入到启动项中。
 
 > **更新说明（2026年9月1日）：** 本版本不再依赖OfakeG。`.out`文件的转换现在可使用内置的 **orca2gaussian** 模块（推荐），它能自动转换原子电荷/自旋布居、识别`%pal`/`%maxcore`，并在扫描任务中让你选择`scanall`或`scanlast`。OfakeG仍可通过`UseOfakeG`作为可选后端。设置窗口与orca2gaussian的提示已支持中英文界面语言切换。
+
+<img title="" src="img/logo.jpeg" alt="" width="281" data-align="center">
 
 ---
 
