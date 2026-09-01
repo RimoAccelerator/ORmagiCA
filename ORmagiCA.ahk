@@ -3,15 +3,24 @@
 ; Global configuration
 global OFAKE_G_PATH := "D:\CompChem\OfakeG.exe"
 global GAUSS_VIEW_PATH := "D:\GaussView\GV6.0.16WIN\g16w\gview.exe"
+global ORCA2GAUSSIAN_PATH := "D:\Projects\Softs\ORmagiCA\ORmagiCA\orca2gaussian.ahk"
+global USE_OFAKEG := "1"
+global UI_LANG := "zh"          ; UI 语言: zh / en
 global SETTINGS_GUI := ""
 global CURRENT_KEYWORDS := "No change"
 
 ; Initialize on startup
 InitializeSettings()
 
+; 按当前 UI 语言返回字符串 (zh=中文, en=English)
+L(zh, en) {
+    global UI_LANG
+    return (UI_LANG = "en") ? en : zh
+}
+
 ; Initialize settings from INI file
 InitializeSettings() {
-    global OFAKE_G_PATH, GAUSS_VIEW_PATH, CURRENT_KEYWORDS, SETTINGS_GUI
+    global OFAKE_G_PATH, GAUSS_VIEW_PATH, ORCA2GAUSSIAN_PATH, USE_OFAKEG, UI_LANG, CURRENT_KEYWORDS, SETTINGS_GUI
     
     iniPath := A_ScriptDir "\ORmagiCA_settings.ini"
     
@@ -19,16 +28,42 @@ InitializeSettings() {
     if FileExist(iniPath) {
         savedGV := IniRead(iniPath, "Paths", "GaussView", "")
         savedOF := IniRead(iniPath, "Paths", "OfakeG", "")
+        savedO2G := IniRead(iniPath, "Paths", "Orca2Gaussian", "")
+        savedUse := IniRead(iniPath, "Paths", "UseOfakeG", "")
+        savedLang := IniRead(iniPath, "General", "Language", "")
         
         if (savedGV != "")
             GAUSS_VIEW_PATH := savedGV
         if (savedOF != "")
             OFAKE_G_PATH := savedOF
+        if (savedO2G != "")
+            ORCA2GAUSSIAN_PATH := savedO2G
+        if (savedUse != "")
+            USE_OFAKEG := savedUse
+        if (savedLang != "")
+            UI_LANG := savedLang
     }
     
     ; Create settings GUI
     if !IsObject(SETTINGS_GUI)
         SETTINGS_GUI := SettingsGui()
+}
+
+; 从候选列表里选择一个系统中真实存在的字体 (保证兼容性/优雅回退)
+PickFont(candidates) {
+    for f in candidates
+        if (FontExists(f))
+            return f
+    return candidates[candidates.Length]
+}
+
+FontExists(fontName) {
+    ; 通过枚举字体键判断该字体是否已安装
+    keys := "HKEY_LOCAL_MACHINE\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Fonts"
+    Loop Reg, keys, "V"
+        if (InStr(A_LoopRegName, fontName, true) != 0)
+            return true
+    return false
 }
 
 ; Settings GUI Class
@@ -37,33 +72,57 @@ class SettingsGui {
         ; Create window with shadow style (CS_DROPSHADOW = 0x20000)
         this.gui := Gui("+AlwaysOnTop -Caption +ToolWindow +LastFound")
         DllCall("SetClassLong", "Ptr", this.gui.Hwnd, "Int", -26, "Int", DllCall("GetClassLong", "Ptr", this.gui.Hwnd, "Int", -26) | 0x20000)
-        
-        this.gui.SetFont("s10", "Segoe UI")
-        this.gui.BackColor := "FFFFFF"
-        
-        ; Create controls
-        this.gui.Add("Text", "x10 y10", "GaussView Path:")
-        this.gvPath := this.gui.Add("Edit", "x10 y30 w400", GAUSS_VIEW_PATH)
-        
-        this.gui.Add("Text", "x10 y60", "OfakeG Path:")
-        this.ofakePath := this.gui.Add("Edit", "x10 y80 w400", OFAKE_G_PATH)
-        
+
+        ; 优雅古典衬线字体 (带兼容回退)
+        this.fontName := PickFont(["Palatino Linotype", "Book Antiqua", "Georgia", "Cambria", "Times New Roman"])
+        this.gui.SetFont("s11", this.fontName)
+        this.gui.BackColor := "F4F1EC"   ; 米白古典底
+
+        ; 顶部标题条
+        this.lblTitle := this.gui.Add("Text", "x14 y12 w400 Center", L("⚙  ORmagiCA 设置", "⚙  ORmagiCA  Settings"))
+        this.gui.SetFont("s12 Bold", this.fontName)
+        this.lblTitle.SetFont("s12 Bold", this.fontName)
+        this.gui.SetFont("s11", this.fontName)
+        this.lblSep := this.gui.Add("Text", "x14 y42 w400 Center", "──────────────────────────────")
+
+        ; 标签
+        this.gui.SetFont("s10", this.fontName)
+        this.lblGv := this.gui.Add("Text", "x14 y62", L("GaussView 路径:", "GaussView Path:"))
+        this.gvPath := this.gui.Add("Edit", "x14 y82 w400", GAUSS_VIEW_PATH)
+
+        this.lblOf := this.gui.Add("Text", "x14 y112", L("OfakeG 路径:", "OfakeG Path:"))
+        this.ofakePath := this.gui.Add("Edit", "x14 y132 w400", OFAKE_G_PATH)
+
+        this.lblO2g := this.gui.Add("Text", "x14 y162", L("orca2gaussian 模块路径 (.ahk / .py):", "orca2gaussian module path (.ahk / .py):"))
+        this.o2gPath := this.gui.Add("Edit", "x14 y182 w400", ORCA2GAUSSIAN_PATH)
+
+        this.lblUse := this.gui.Add("Text", "x14 y212", L("Use OfakeG (1=OfakeG, 0=orca2gaussian):", "Use OfakeG (1=OfakeG, 0=orca2gaussian):"))
+        this.useOfakeG := this.gui.Add("Edit", "x14 y232 w400", USE_OFAKEG)
+
+        this.lblLang := this.gui.Add("Text", "x14 y262", L("UI 语言 (zh/en):", "UI Language (zh/en):"))
+        this.langDrop := this.gui.Add("DropDownList", "x14 y282 w400", ["zh", "en"])
+        this.langDrop.Value := (UI_LANG = "en") ? 2 : 1
+
         ; ORCA Keywords section with "No change" as protected item
-        this.gui.Add("Text", "x10 y110", "ORCA Keywords:")
-        this.keywordsList := this.gui.Add("ListBox", "x10 y130 w400 h150 vKeywordsList")
-        
-        ; Add keyword input and buttons
-        this.newKeyword := this.gui.Add("Edit", "x10 y290 w300")
-        addBtn := this.gui.Add("Button", "x320 y290 w90 h25", "Add")
-        deleteBtn := this.gui.Add("Button", "x320 y320 w90 h25", "Delete")
-        
+        this.lblKw := this.gui.Add("Text", "x14 y312", L("ORCA 关键字:", "ORCA Keywords:"))
+        this.keywordsList := this.gui.Add("ListBox", "x14 y332 w400 h150 vKeywordsList")
+
+        ; Add keyword input and buttons (衬线字体按钮)
+        this.gui.SetFont("s10", this.fontName)
+        this.newKeyword := this.gui.Add("Edit", "x14 y502 w300")
+        this.btnAdd := this.gui.Add("Button", "x320 y502 w94 h28", L("添加", "Add"))
+        this.btnDel := this.gui.Add("Button", "x320 y536 w94 h28", L("删除", "Delete"))
+
         ; Events
         this.gvPath.OnEvent("Change", this.SavePaths.Bind(this))
         this.ofakePath.OnEvent("Change", this.SavePaths.Bind(this))
+        this.o2gPath.OnEvent("Change", this.SavePaths.Bind(this))
+        this.useOfakeG.OnEvent("Change", this.SavePaths.Bind(this))
+        this.langDrop.OnEvent("Change", this.OnLangChange.Bind(this))
         this.keywordsList.OnEvent("Change", this.UpdateKeywords.Bind(this))
         this.keywordsList.OnEvent("Change", this.OnKeywordSelected.Bind(this))  ; Add this line
-        addBtn.OnEvent("Click", this.AddKeyword.Bind(this))
-        deleteBtn.OnEvent("Click", this.DeleteKeyword.Bind(this))
+        this.btnAdd.OnEvent("Click", this.AddKeyword.Bind(this))
+        this.btnDel.OnEvent("Click", this.DeleteKeyword.Bind(this))
         
         ; Handle Enter key in new keyword edit box
         this.newKeyword.OnEvent("Change", this.OnNewKeywordChange.Bind(this))
@@ -87,8 +146,8 @@ class SettingsGui {
         screenHeight := monBottom - monTop
         
         ; Fixed window dimensions
-        winWidth := 420
-        winHeight := 360
+        winWidth := 436
+        winHeight := 580
         
         ; Calculate center position (accounting for monitor position)
         x := monLeft + (screenWidth - winWidth) / 2
@@ -186,15 +245,38 @@ class SettingsGui {
     }
     
     SavePaths(*) {
-        global OFAKE_G_PATH, GAUSS_VIEW_PATH
+        global OFAKE_G_PATH, GAUSS_VIEW_PATH, ORCA2GAUSSIAN_PATH, USE_OFAKEG
         
         iniPath := A_ScriptDir "\ORmagiCA_settings.ini"
         
         GAUSS_VIEW_PATH := this.gvPath.Text
         OFAKE_G_PATH := this.ofakePath.Text
+        ORCA2GAUSSIAN_PATH := this.o2gPath.Text
+        USE_OFAKEG := this.useOfakeG.Text
         
         IniWrite(GAUSS_VIEW_PATH, iniPath, "Paths", "GaussView")
         IniWrite(OFAKE_G_PATH, iniPath, "Paths", "OfakeG")
+        IniWrite(ORCA2GAUSSIAN_PATH, iniPath, "Paths", "Orca2Gaussian")
+        IniWrite(USE_OFAKEG, iniPath, "Paths", "UseOfakeG")
+    }
+    
+    OnLangChange(*) {
+        global UI_LANG
+        UI_LANG := (this.langDrop.Value = 2) ? "en" : "zh"
+        iniPath := A_ScriptDir "\ORmagiCA_settings.ini"
+        IniWrite(UI_LANG, iniPath, "General", "Language")
+        ; 就地更新标签文本，避免销毁重建冲突
+        try {
+            this.lblTitle.Text := L("⚙  ORmagiCA 设置", "⚙  ORmagiCA  Settings")
+            this.lblGv.Text := L("GaussView 路径:", "GaussView Path:")
+            this.lblOf.Text := L("OfakeG 路径:", "OfakeG Path:")
+            this.lblO2g.Text := L("orca2gaussian 模块路径 (.ahk / .py):", "orca2gaussian module path (.ahk / .py):")
+            this.lblUse.Text := L("Use OfakeG (1=OfakeG, 0=orca2gaussian):", "Use OfakeG (1=OfakeG, 0=orca2gaussian):")
+            this.lblLang.Text := L("UI 语言 (zh/en):", "UI Language (zh/en):")
+            this.lblKw.Text := L("ORCA 关键字:", "ORCA Keywords:")
+            this.btnAdd.Text := L("添加", "Add")
+            this.btnDel.Text := L("删除", "Delete")
+        }
     }
     
     UpdateKeywords(*) {
@@ -708,9 +790,51 @@ GetSelectedFile()
     return files.Length > 0 ? files[1] : ""
 }
 
+; ---------------------------------------------------------------------
+; RunWithProgress: 显示不确定进度条 (marquee)，运行命令并等待其结束。
+;   用 Run 启动并轮询进程 PID，同时推进进度条动画，转换完成后关闭。
+; ---------------------------------------------------------------------
+RunWithProgress(cmd, workDir, titleText)
+{
+    progGui := Gui("+AlwaysOnTop +ToolWindow -SysMenu")
+    progGui.SetFont("s9", "Segoe UI")
+    progGui.SetFont("s10 Bold", "Segoe UI")
+    progGui.Add("Text", "x14 y14 w360 Center", titleText)
+    progGui.SetFont("s9", "Segoe UI")
+    progGui.Add("Text", "x14 y44 w360 Center vStatusText", L("正在处理...", "Processing..."))
+    bar := progGui.Add("Progress", "x14 y74 w360 h26 Range0-100")
+    progGui.Show("w388 h120")
+
+    ; 启动转换 (非阻塞)
+    started := A_TickCount
+    Run(cmd, workDir, , &procPID)
+
+    ; 推进 marquee 动画
+    p := 0
+    While ProcessExist(procPID)
+    {
+        p += 4
+        if (p > 100)
+            p := 0
+        try bar.Value := p
+        Sleep(40)
+    }
+    ; 至少显示一小段时间，避免一闪而过
+    elapsed := A_TickCount - started
+    while (elapsed < 600) {
+        Sleep(30)
+        elapsed := A_TickCount - started
+    }
+    if IsSet(procPID)
+        p := 0
+    try progGui.Destroy()
+}
+
 ; Function: Process ORCA output file
 ProcessOrcaOutputFile(orcaFile, filePath, fileName)
 {
+    global USE_OFAKEG, ORCA2GAUSSIAN_PATH, OFAKE_G_PATH
+    
     ; Define the Gaussian format log file to be created
     fakeLogFile := filePath . "\" . fileName . "_fake.out"
     
@@ -728,8 +852,39 @@ ProcessOrcaOutputFile(orcaFile, filePath, fileName)
     ; Extract absorption spectrum data
     spectrumData := ExtractAbsorptionSpectrum(fileContent)
     
+    ; Choose converter based on UseOfakeG setting
+    if (USE_OFAKEG = "0") {
+        ; Use orca2gaussian converter (.ahk or .py)
+        ; NOTE: orca2gaussian writes <input>_fake.log. Remove any old _fake.out.
+        if FileExist(fakeLogFile)
+            FileDelete(fakeLogFile)
+        ; If the job is a relaxed surface scan, orca2gaussian shows a popup to choose
+        ; scanall / scanlast, so pass nothing extra and let it prompt.
+        ; 根据扩展名选择解释器: .ahk 用 A_AhkPath, .py 用 python
+        SplitPath(ORCA2GAUSSIAN_PATH, , , &o2gExt)
+        if (o2gExt = "py")
+            cmd := "python `"" . ORCA2GAUSSIAN_PATH . "`" `"" . orcaFile . "`""
+        else
+            cmd := "`"" . A_AhkPath . "`" `"" . ORCA2GAUSSIAN_PATH . "`" `"" . orcaFile . "`""
+        RunWithProgress(cmd, filePath, L("orca2gaussian 转换中...", "orca2gaussian converting..."))
+        generatedLog := RegExReplace(orcaFile, "\.out$") . "_fake.log"
+        if FileExist(generatedLog) {
+            ; 交给 GaussView 前把 route 行里的 "/" 转义为 "?"，GV 才不至于拆分基组关键字
+            ; (例如 def2/j -> def2?j)。原始 orca2gaussian 产物仍保留 "/"。
+            EscGvRoute(generatedLog)
+            OpenWithGaussView(generatedLog)
+            try {
+                Sleep(500)
+                FileDelete(generatedLog)
+            }
+            return
+        }
+        MsgBox("orca2gaussian failed to generate a converted file.", "Error", "Icon!")
+        return
+    }
+    
     ; Call OfakeG.exe to convert file
-    RunWait("`"" . OFAKE_G_PATH . "`" `"" . orcaFile . "`"", filePath)
+    RunWithProgress("`"" . OFAKE_G_PATH . "`" `"" . orcaFile . "`"", filePath, L("OfakeG 转换中...", "OfakeG converting..."))
     
     ; If generated file exists, add additional information
     if (FileExist(fakeLogFile))
@@ -793,16 +948,14 @@ ProcessOrcaOutputFile(orcaFile, filePath, fileName)
     }
 }
 
-; Function: Extract keywords from ORCA input and replace / with ?
+; Function: Extract keywords from ORCA input (keep slashes verbatim)
 ExtractKeywords(content)
 {
     ; Match pattern like "|  3> ! opt freq wb97x-d3 def2-sv(p) def2-svp/c rijcosx"
     regexPattern := "m)^\s*\|?\s*\d?>?\s*! ?(.+)$"
     if RegExMatch(content, regexPattern, &match)
     {
-        result := Trim(match[1])
-        result := StrReplace(result, "/", "?") ; Replace / with ?
-        return result
+        return Trim(match[1])
     }
     return ""
 }
@@ -987,7 +1140,8 @@ CreateGaussianInput(filePath, nprocs, maxcore, keywords, charge, multiplicity, c
     ; Build file content
     content := "%mem=" . memGB . "GB`n"
     content .= "%nprocshared=" . nprocs . "`n"
-    content .= "# " . keywords . "`n`n"
+    ; 交给 GV 显示的 .gjf：关键字里的 "/" 转义为 "?" (避免 GV 拆分基组)，保存回 ORCA 时再还原
+    content .= "# " . StrReplace(keywords, "/", "?") . "`n`n"
     content .= "TC`n`n"
     content .= charge . " " . multiplicity . "`n"
     content .= coordinates . "`n`n"
@@ -1033,6 +1187,35 @@ OpenWithGaussView(filePath)
     {
         ; If GaussView is not found, try to open with file association
         Run(filePath)
+    }
+}
+
+; 在把 .log 交给 GaussView 前，将 route 行(以 " # " 开头)里辅助基的 "/" 转义为 "?"，
+; 避免 GV 拆分基组关键字(如 def2/j 显示成 def2 def2-svp j)。保留第一个 "/"(method/basis 分隔)。
+EscGvRoute(logFile)
+{
+    if !FileExist(logFile)
+        return
+    lines := StrSplit(FileRead(logFile), "`n", "`r")
+    out := []
+    For idx, line in lines {
+        if (SubStr(line, 1, 3) = " # ") {
+            ; 按 "/" 分段：method/basis 间的第一个 "/" 保留，其后辅助基的 "/" 改为 "?"
+            segments := StrSplit(line, "/")
+            newLine := segments[1] . "/" . segments[2]
+            s := 2
+            While (++s <= segments.Length)
+                newLine .= "?" . segments[s]
+            line := newLine
+        }
+        out.Push(line)
+    }
+    try {
+        txt := ""
+        For ln in out
+            txt .= ln . "`n"
+        FileDelete(logFile)
+        FileAppend(txt, logFile)
     }
 }
 

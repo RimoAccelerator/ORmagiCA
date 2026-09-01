@@ -1,3 +1,25 @@
 ORmagiCA_settings.ini
 ORmagiCA.exe
 *.exe
+*.out
+
+# 测试/示例输入输出文件 (已集中到 examples/)
+examples/
+example_*.out
+example_*_fake.log
+example_*_scan*_fake.log
+exmple_sp.out
+exmple_sp_fake.log
+AcO_SP.log
+AgSegphos*.log
+
+# 转换过程生成的中间文件
+*_fake.log
+*_fake.out
+*_fake.gjf
+
+# Python 缓存
+__pycache__/
+*.pyc
+*.bak
+FORMAT_DOC.md
