@@ -227,6 +227,7 @@ ParseORCA(path) {
             isNewFrame := true
         } else if (InStr(L, "RELAXED SURFACE SCAN STEP") && RegExMatch(L, "RELAXED SURFACE SCAN STEP\s+(\d+)", &sc)) {
             isNewFrame := true
+            g.calc := "SCAN"          ; 关键：输出出现扫描步即按扫描处理(即使 ! 行只写了 opt)
             g.curScanStep := Integer(sc[1])
             ; 向后找扫描坐标值行
             k := i

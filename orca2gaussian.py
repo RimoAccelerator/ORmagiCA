@@ -402,6 +402,7 @@ def parse_orca(path: str) -> Run:
             sc = re.search(r"RELAXED SURFACE SCAN STEP\s+(\d+)", L)
             if sc:
                 is_new_frame = True
+                g.calc = "SCAN"      # 关键：输出出现扫描步即按扫描处理(即使 ! 行只写了 opt)
                 g.cur_scan_step = int(sc.group(1))
                 k = i
                 while k < i + 10 and k + 1 < n:
