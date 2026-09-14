@@ -141,11 +141,11 @@ ParseORCA(path) {
             }
             if RegExMatch(t, "^\!") {
                 kw := StrLower(t)
-                if RegExMatch(kw, "\boptts\b")
-                    g.isTS := true, g.calc := "OPT"
-                else if RegExMatch(kw, "(^|\s)(scants|scan|scan_ts)(\s|$)")
+                if RegExMatch(kw, "(^|\s)(scants|scan_ts|scan)(\s|$)")
                     g.calc := "SCAN"
-                else if RegExMatch(kw, "(^|\s)opt(\s|$)|\bcopt\b|\bopt\b")
+                else if RegExMatch(kw, "(^|\s)(optts|tsopt|opt_ts)(\s|$)")
+                    g.isTS := true, g.calc := "OPT"
+                else if RegExMatch(kw, "(^|\s)(verytightopt|tightopt|looseopt|opt|copt)(\s|$)")
                     g.calc := "OPT"
                 if RegExMatch(kw, "(^|\s)(freq|numfreq)(\s|$)")
                     g.hasFreq := true

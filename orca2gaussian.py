@@ -300,12 +300,12 @@ def parse_orca(path: str) -> Run:
                             g.kw_verbatim.append(tk)
             if re.match(r"^!", t):
                 kw = t.lower()
-                if re.search(r"\boptts\b", kw):
+                if re.search(r"(^|\s)(scants|scan_ts|scan)(\s|$)", kw):
+                    g.calc = "SCAN"
+                elif re.search(r"(^|\s)(optts|tsopt|opt_ts)(\s|$)", kw):
                     g.isTS = True
                     g.calc = "OPT"
-                elif re.search(r"(^|\s)(scants|scan|scan_ts)(\s|$)", kw):
-                    g.calc = "SCAN"
-                elif re.search(r"(^|\s)opt(\s|$)|\bcopt\b|\bopt\b", kw):
+                elif re.search(r"(^|\s)(verytightopt|tightopt|looseopt|opt|copt)(\s|$)", kw):
                     g.calc = "OPT"
                 if re.search(r"(^|\s)(freq|numfreq)(\s|$)", kw):
                     g.hasFreq = True
