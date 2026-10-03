@@ -666,19 +666,20 @@ CreateOrcaInput(filePath, gjfData, maxcore)
         keywords := CleanupModRedundantKeyword(keywords)
     
     content .= "! " . keywords . "`n"
-    
+
+    ; 把 % 段落关键字 (如 %geom ... end) 放在 "!" 关键字行与几何坐标之间，便于查看
+    if (gjfData.Has("settings") && gjfData["settings"] != "")
+        content .= "`n" . gjfData["settings"] . "`n"
+
     ; Convert G16 modredundant constraints/scans and frozen atoms to ORCA format
     geomBlock := BuildOrcaGeomBlock(gjfData)
     if (geomBlock != "")
         content .= "`n" . geomBlock . "`n"
-    
+
     content .= "*xyz " . gjfData["charge"] . " " . gjfData["multiplicity"] . "`n"
     content .= gjfData["coordinates"] . "`n"
     content .= "*`n"
-    
-    if (gjfData.Has("settings") && gjfData["settings"] != "")
-        content .= gjfData["settings"] . "`n"
-    
+
     try
     {
         if (FileExist(filePath))
@@ -1016,6 +1017,22 @@ ExtractCoordinates(content)
     return coordinates
 }
 
+; 统计字符串前导空白字符个数 (用于 ORCA 块嵌套终止判断)
+LeadWS(s)
+{
+    n := 0
+    While (n < StrLen(s) && (SubStr(s, n + 1, 1) = " " || SubStr(s, n + 1, 1) = "`t"))
+        n++
+    return n
+}
+
+; 判断 ORCA 段内容是否为开启嵌套 end 的子段 (如 %geom 内的 Constraints/Scan)
+IsOrcaSubSection(txt)
+{
+    t := Trim(txt)
+    return RegExMatch(t, "i)^(Constraints|Scan|DIIS|SOSCF|NewGTO|NewAuxGTO|NewECP|ReducedInternalCoordinates)$") ? true : false
+}
+
 ; Function: Extract other calculation settings
 ExtractSettings(content, fileType := "out")
 {
@@ -1023,107 +1040,138 @@ ExtractSettings(content, fileType := "out")
     
     if (fileType = "inp")
     {
-        ; Logic for .inp files - handle both single-line and multi-line blocks
+        ; Logic for .inp files - handle both single-line and multi-line (nested) blocks
         lines := StrSplit(content, "`n", "`r")
         i := 1
         while (i <= lines.Length)
         {
-            line := Trim(lines[i])
-            
+            rawLine := lines[i]
+            line := Trim(rawLine)
+
             ; Check if line starts with % and is a setting block
             if (RegExMatch(line, "^%(\w+)(.*)$", &match))
             {
                 settingName := match[1]
                 restOfLine := Trim(match[2])
-                
+
                 ; Skip pal and maxcore as they're handled separately
                 if (settingName = "pal" || settingName = "maxcore")
                 {
                     i++
                     continue
                 }
-                
+
                 ; Start building the setting block
-                settingBlock := line . "`n"
-                
+                settingBlock := rawLine . "`n"
+
                 ; Check if it's a single-line setting ending with "end"
-                if (InStr(restOfLine, "end"))
+                if (RegExMatch(restOfLine, "i)\bend\b"))
                 {
                     settings .= settingBlock
                     i++
                     continue
                 }
-                
-                ; It's a multi-line block, read until we find "end"
+
+                ; Multi-line block: collect until the matching "end" (nesting-aware).
+                ; ORCA 块可嵌套(如 %geom 内的 Constraints ... end)，不能见到第一个 end 就停。
+                baseIndent := LeadWS(rawLine)
+                depth := 1
                 i++
                 while (i <= lines.Length)
                 {
-                    currentLine := lines[i]
-                    settingBlock .= currentLine . "`n"
-                    
-                    ; Check if this line contains "end" (allowing for whitespace)
-                    if (RegExMatch(Trim(currentLine), "^end\s*$"))
+                    curRaw := lines[i]
+                    cur := Trim(curRaw)
+                    ; 安全：遇到新的顶层指令(%/!/几何 *xyz/*)则停止，绝不把几何坐标并入设置
+                    if (RegExMatch(cur, "^(%|!|\*)"))
                         break
-                    
+                    settingBlock .= curRaw . "`n"
+                    if (RegExMatch(cur, "i)^end$"))
+                    {
+                        depth--
+                        if (depth <= 0 || LeadWS(curRaw) <= baseIndent)
+                        {
+                            i++
+                            break
+                        }
+                    }
+                    else if (IsOrcaSubSection(cur))
+                        depth++
                     i++
                 }
-                
+
                 settings .= settingBlock
+                continue
             }
-            
+
             i++
         }
     }
     else
     {
-        ; Logic for .out files - handle both single-line and multi-line blocks
+        ; Logic for .out files - handle both single-line and multi-line (nested) blocks
         lines := StrSplit(content, "`n", "`r")
         i := 1
         while (i <= lines.Length)
         {
             line := lines[i]
-            
+
             ; Check if line matches the .out file format pattern
             if (RegExMatch(line, "^\s*\|\s*\d+>\s*%(\w+)(.*)$", &match))
             {
                 settingName := match[1]
                 restOfLine := Trim(match[2])
-                
+
                 ; Skip pal and maxcore as they're handled separately
                 if (settingName = "pal" || settingName = "maxcore")
                 {
                     i++
                     continue
                 }
-                
+
                 ; Start building the setting block
                 settingBlock := line . "`n"
-                
+
                 ; Check if it's a single-line setting ending with "end"
-                if (InStr(restOfLine, "end"))
+                if (RegExMatch(restOfLine, "i)\bend\b"))
                 {
                     settings .= settingBlock
                     i++
                     continue
                 }
-                
-                ; It's a multi-line block, read until we find "end"
+
+                ; Multi-line block: collect until the matching "end" (nesting-aware).
+                ; 回显行的缩进不可靠，故用子段计数判断嵌套深度。
+                depth := 1
                 i++
                 while (i <= lines.Length)
                 {
-                    currentLine := lines[i]
-                    settingBlock .= currentLine . "`n"
-                    
-                    ; Check if this line contains "end" with the .out format
-                    if (RegExMatch(currentLine, "^\s*\|\s*\d+>\s*end\s*$"))
+                    curLine := lines[i]
+                    curContent := ""
+                    if (RegExMatch(curLine, "^\s*\|\s*\d+>\s*(.*)$", &cm))
+                        curContent := cm[1]
+                    cur := Trim(curContent)
+                    ; 安全：遇到新的顶层指令则停止(说明块未正确闭合)
+                    if (RegExMatch(cur, "^(%|!|\*)"))
                         break
-                    
+                    settingBlock .= curLine . "`n"
+                    if (RegExMatch(cur, "i)^end$"))
+                    {
+                        depth--
+                        if (depth <= 0)
+                        {
+                            i++
+                            break
+                        }
+                    }
+                    else if (IsOrcaSubSection(cur))
+                        depth++
                     i++
                 }
-                
+
                 settings .= settingBlock
+                continue
             }
-            
+
             i++
         }
     }
@@ -1131,21 +1179,194 @@ ExtractSettings(content, fileType := "out")
     return RTrim(settings, "`n")
 }
 
+; 用换行连接数组
+JoinLines(arr)
+{
+    s := ""
+    for l in arr
+        s .= l . "`n"
+    return s
+}
+
+; 把 ORCA %geom 块里的 Constraints/Scan 子段转成 GaussView 可读的 G16 ModRedundant 行。
+;   { B i j C } / { A i j k C } / { D i j k l C } -> "B i+1 j+1 F" ... (0-based -> 1-based)
+;   { C i C }                                     -> "X i+1 F"
+;   T a1 [a2 a3 a4] = start, end, n               -> "T a1+1 ... S n step"
+; geomLines: %geom 块的所有行(含首行 %geom 与末行 end)
+; modredArr: 输出数组, 追加 G16 ModRedundant 行
+; 返回: 移除 Constraints/Scan 子段后的 %geom 文本(若已无实质内容则返回 "")
+ParseGeomBlockToModred(geomLines, modredArr)
+{
+    out := []
+    n := geomLines.Length
+    i := 1
+    while (i <= n)
+    {
+        t := Trim(geomLines[i])
+        if (RegExMatch(t, "i)^Constraints$"))
+        {
+            i++
+            while (i <= n)
+            {
+                ct := Trim(geomLines[i])
+                if (RegExMatch(ct, "i)^end$"))
+                {
+                    i++
+                    break
+                }
+                if (RegExMatch(ct, "^\{\s*([BAD])\s+([\d\s]+?)\s*C\s*\}$", &m))
+                {
+                    typ := StrUpper(m[1])
+                    ml := typ
+                    for tok in StrSplit(Trim(m[2]), " ")
+                        if (tok != "")
+                            ml .= " " . (Integer(tok) + 1)
+                    ml .= " F"
+                    modredArr.Push(ml)
+                }
+                else if (RegExMatch(ct, "^\{\s*C\s+(\d+)\s+C\s*\}$", &mc))
+                    modredArr.Push("X " . (Integer(mc[1]) + 1) . " F")
+                i++
+            }
+            continue
+        }
+        else if (RegExMatch(t, "i)^Scan$"))
+        {
+            i++
+            while (i <= n)
+            {
+                st := Trim(geomLines[i])
+                if (RegExMatch(st, "i)^end$"))
+                {
+                    i++
+                    break
+                }
+                if (RegExMatch(st, "i)^([BAD])\s+([\d\s]+?)\s*=\s*(-?[\d\.]+)\s*,\s*(-?[\d\.]+)\s*,\s*(\d+)\s*$", &ms))
+                {
+                    typ := StrUpper(ms[1])
+                    ml := typ
+                    for tok in StrSplit(Trim(ms[2]), " ")
+                        if (tok != "")
+                            ml .= " " . (Integer(tok) + 1)
+                    nstep := Integer(ms[5])
+                    step := (ms[4] + 0 - (ms[3] + 0)) / Max(nstep, 1)
+                    ml .= " S " . nstep . " " . Format("{:.6f}", step)
+                    modredArr.Push(ml)
+                }
+                i++
+            }
+            continue
+        }
+        out.Push(geomLines[i])
+        i++
+    }
+    ; 若除 %geom/end 外无实质内容, 视为整块已转换
+    hasContent := false
+    for l in out
+    {
+        tl := Trim(l)
+        if (tl != "" && !RegExMatch(tl, "i)^%geom$") && !RegExMatch(tl, "i)^end$"))
+            hasContent := true
+    }
+    return hasContent ? RTrim(JoinLines(out), "`n") : ""
+}
+
+; 扫描 settings 文本, 把 %geom 的 Constraints/Scan 转为 G16 ModRedundant 行。
+; 返回 Map: { modred: "...", settings: "移除已转换子段后的 settings" }
+ConvertOrcaGeomToModRedundant(settings)
+{
+    modred := []
+    remaining := []
+    lines := StrSplit(settings, "`n", "`r")
+    n := lines.Length
+    i := 1
+    while (i <= n)
+    {
+        line := lines[i]
+        if (RegExMatch(Trim(line), "i)^%geom\b"))
+        {
+            geomLines := [line]
+            depth := 1
+            i++
+            while (i <= n)
+            {
+                cur := lines[i]
+                t := Trim(cur)
+                if (RegExMatch(t, "^(%|!|\*)"))
+                    break
+                geomLines.Push(cur)
+                if (RegExMatch(t, "i)^end$"))
+                {
+                    depth--
+                    if (depth <= 0)
+                    {
+                        i++
+                        break
+                    }
+                }
+                else if (IsOrcaSubSection(t))
+                    depth++
+                i++
+            }
+            keep := ParseGeomBlockToModred(geomLines, modred)
+            if (keep != "")
+                remaining.Push(keep)
+            continue
+        }
+        remaining.Push(line)
+        i++
+    }
+    res := Map()
+    res["modred"] := modred.Length ? RTrim(JoinLines(modred), "`n") : ""
+    res["settings"] := RTrim(JoinLines(remaining), "`n")
+    return res
+}
+
 ; Function: Create Gaussian input file
 CreateGaussianInput(filePath, nprocs, maxcore, keywords, charge, multiplicity, coordinates, settings)
 {
     ; Calculate memory (GB)
     memGB := Floor(maxcore * nprocs / 1000)
-    
+
+    ; 把 ORCA %geom 的 Constraints/Scan 转成 G16 ModRedundant(供 GV 读取冻结/扫描)
+    conv := ConvertOrcaGeomToModRedundant(settings)
+    modred := conv["modred"]
+    settings := conv["settings"]
+
+    ; route: 关键字里的 "/" 转义为 "?" (避免 GV 拆分基组)，保存回 ORCA 时再还原
+    routeKw := StrReplace(keywords, "/", "?")
+    ; 若有冻结/扫描, 确保 route 含 opt=modredundant, 否则 GV 不显示约束编辑器
+    if (modred != "" && !RegExMatch(routeKw, "i)modredundant"))
+    {
+        parts := StrSplit(routeKw, " ")
+        foundOpt := false
+        for idx, p in parts
+        {
+            if (StrLower(p) = "opt")
+            {
+                parts[idx] := "opt=modredundant"
+                foundOpt := true
+            }
+        }
+        if (!foundOpt)
+            parts.Push("opt=modredundant")
+        routeKw := ""
+        for p in parts
+            routeKw .= (routeKw = "" ? "" : " ") . p
+    }
+
     ; Build file content
     content := "%mem=" . memGB . "GB`n"
     content .= "%nprocshared=" . nprocs . "`n"
-    ; 交给 GV 显示的 .gjf：关键字里的 "/" 转义为 "?" (避免 GV 拆分基组)，保存回 ORCA 时再还原
-    content .= "# " . StrReplace(keywords, "/", "?") . "`n`n"
+    content .= "# " . routeKw . "`n`n"
     content .= "TC`n`n"
     content .= charge . " " . multiplicity . "`n"
     content .= coordinates . "`n`n"
-    
+
+    ; G16 ModRedundant 行放在坐标之后的空行之后(独立的一段)，GV 才能正确解析
+    if (modred != "")
+        content .= modred . "`n`n"
+
     ; Add other settings (if any)
     if (settings != "")
         content .= settings . "`n"
